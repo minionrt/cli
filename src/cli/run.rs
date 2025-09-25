@@ -10,7 +10,7 @@ use crate::{
     runtime::ContainerConfig,
 };
 
-const AGENT_CONTAINER_IMAGE: &str = "ghcr.io/autominion/default-minion:x86-64-latest";
+const AGENT_CONTAINER_IMAGE: &str = "ghcr.io/minionrt/default-minion:x86-64-latest";
 
 pub async fn run<P: AsRef<Path>>(
     llm_router_table: LLMRouterTable,

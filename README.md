@@ -1,4 +1,4 @@
-# autominion CLI
+# minionrt CLI
 
 Run compatible agents from the command line.
 
@@ -11,7 +11,7 @@ Run compatible agents from the command line.
 - Install a Rust toolchain using [rustup.rs](https://rustup.rs/).
 - Clone the repository on your machine:
   ```console
-  git clone --recurse-submodules https://github.com/autominion/cli
+  git clone --recurse-submodules https://github.com/minionrt/cli
   ```
 - To locally install the `minion` executable, run:
   ```console
@@ -26,7 +26,7 @@ Run compatible agents from the command line.
   ```console
   minion run --nested
   ```
-  This will start the [default agent](https://github.com/autominion/default-minion) and provide it access to the git repository in the current directory.
+  This will start the [default agent](https://github.com/minionrt/default-minion) and provide it access to the git repository in the current directory.
   Note that it will only have access to content checked into git.
   Unstaged or ignored files (which may contain secrets) will deliberately **not** be accessible to the agent.
   Use `minion --help` and `minion run --help` for more information on CLI usage.
