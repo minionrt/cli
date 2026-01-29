@@ -252,6 +252,12 @@ impl LocalDockerRuntime {
         self.docker.remove_container(&container_id, None).await?;
         Ok(())
     }
+
+    /// Delete an image by its ID
+    pub async fn delete_image(&self, image_id: String) -> anyhow::Result<()> {
+        self.docker.remove_image(&image_id, None, None).await?;
+        Ok(())
+    }
 }
 
 fn running_on_windows_or_mac_os() -> bool {
