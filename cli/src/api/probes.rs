@@ -1,11 +1,16 @@
-use actix_web::{get, HttpResponse, Responder};
+use axum::routing::get;
+use axum::Router;
 
-#[get("/ready")]
-async fn readiness() -> impl Responder {
-    HttpResponse::Ok().body("Ready")
+pub fn router() -> Router {
+    Router::new()
+        .route("/ready", get(readiness))
+        .route("/healthz", get(healthz))
 }
 
-#[get("/healthz")]
-async fn healthz() -> impl Responder {
-    HttpResponse::Ok().body("Healthy")
+async fn readiness() -> &'static str {
+    "Ready"
+}
+
+async fn healthz() -> &'static str {
+    "Healthy"
 }

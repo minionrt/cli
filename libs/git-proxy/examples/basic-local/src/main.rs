@@ -1,12 +1,13 @@
 //! This example creates a temporary local git repository and serves it over HTTP with Basic Auth.
 
 use std::path::PathBuf;
+use std::sync::Arc;
 
-use actix_web::dev::ServiceRequest;
-use actix_web::error::ErrorUnauthorized;
-use actix_web::{App, Error, HttpMessage, HttpServer};
-use actix_web_httpauth::extractors::basic::BasicAuth;
-use git_proxy::{scope, ForwardToLocal, ProxyBehaivor};
+use axum::body::Body;
+use axum::http::Request;
+use axum::Extension;
+use axum::Router;
+use git_proxy::{scope, BasicAuth, ForwardToLocal, ProxyBehaivor, ProxyError};
 
 use git2::Repository;
 use tempfile::TempDir;
@@ -23,14 +24,18 @@ struct AppConfig {
 
 /// Validate BasicAuth credentials and, if valid, store a `ProxyBehaivor` in the request extensions.
 async fn basic_auth_validator(
-    req: ServiceRequest,
+    mut req: Request<Body>,
     credentials: BasicAuth,
-) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    let user = credentials.user_id();
-    let pass = credentials.password().unwrap_or("");
+) -> Result<Request<Body>, ProxyError> {
+    let user = credentials.username();
+    let pass = credentials.password();
 
     if user == USER && pass == TOKEN {
-        let app_config = req.app_data::<AppConfig>().expect("AppConfig not found");
+        let app_config = req
+            .extensions()
+            .get::<Arc<AppConfig>>()
+            .cloned()
+            .expect("AppConfig not found");
         req.extensions_mut().insert(ProxyBehaivor {
             allowed_ref: ALLOWED_REF.to_string(),
             forward: ForwardToLocal {
@@ -40,11 +45,11 @@ async fn basic_auth_validator(
         });
         Ok(req)
     } else {
-        Err((ErrorUnauthorized("Invalid username or password"), req))
+        Err(ProxyError::unauthorized("Invalid username or password"))
     }
 }
 
-#[actix_web::main]
+#[tokio::main]
 async fn main() -> std::io::Result<()> {
     let temp_dir = TempDir::new().expect("Failed to create temporary directory");
     let repo_path = temp_dir.path();
@@ -62,12 +67,10 @@ async fn main() -> std::io::Result<()> {
     let bind_addr = "127.0.0.1:8080";
     println!("Starting Git proxy on http://{}", bind_addr);
 
-    HttpServer::new(move || {
-        App::new()
-            .app_data(app_config.clone())
-            .service(scope("", basic_auth_validator))
-    })
-    .bind(bind_addr)?
-    .run()
-    .await
+    let app = Router::new()
+        .merge(scope("", basic_auth_validator))
+        .layer(Extension(Arc::new(app_config)));
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    axum::serve(listener, app).await
 }

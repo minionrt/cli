@@ -1,84 +1,84 @@
 use std::io::{self, Write};
+use std::sync::Arc;
 
-use actix_web::Scope;
-use actix_web::{get, post, web, HttpResponse};
+use axum::extract::Json;
+use axum::http::StatusCode;
+use axum::routing::{get, post};
+use axum::Extension;
+use axum::Router;
 use serde::Deserialize;
-use tokio::sync::{oneshot, Mutex};
 
 use agent_api::types::task::*;
 
-use crate::api::TaskOutcome;
-use crate::context::Context;
+use crate::api::{AppState, TaskOutcome};
 
 #[derive(Deserialize)]
 pub struct InquiryPayload {
     pub inquiry: String,
 }
 
-pub fn scope() -> Scope {
-    Scope::new("/agent")
-        .service(task_info)
-        .service(task_complete)
-        .service(task_fail)
-        .service(inquiry)
+pub fn router() -> Router {
+    Router::new()
+        .route("/agent/task", get(task_info))
+        .route("/agent/task/complete", post(task_complete))
+        .route("/agent/task/fail", post(task_fail))
+        .route("/agent/inquiry", post(inquiry))
 }
 
-#[get("/task")]
-pub async fn task_info(ctx: web::Data<Context>) -> HttpResponse {
+pub async fn task_info(Extension(state): Extension<Arc<AppState>>) -> Json<Task> {
     let response = Task {
         status: TaskStatus::Running,
-        description: ctx.task_description.clone(),
-        git_user_name: ctx.git_user_name.clone(),
-        git_user_email: ctx.git_user_email.clone(),
-        git_repo_url: ctx.git_repo_url.clone(),
-        git_branch: ctx.git_branch.clone(),
+        description: state.ctx.task_description.clone(),
+        git_user_name: state.ctx.git_user_name.clone(),
+        git_user_email: state.ctx.git_user_email.clone(),
+        git_repo_url: state.ctx.git_repo_url.clone(),
+        git_branch: state.ctx.git_branch.clone(),
     };
 
-    HttpResponse::Ok().json(response)
+    Json(response)
 }
 
-#[post("/task/complete")]
 pub async fn task_complete(
-    body: web::Json<TaskComplete>,
-    shutdown_tx: web::Data<Mutex<Option<oneshot::Sender<TaskOutcome>>>>,
-) -> HttpResponse {
-    let body = body.into_inner();
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<TaskComplete>,
+) -> StatusCode {
     println!("Task completed");
     println!("{}", body.description);
 
-    let tx = shutdown_tx
-        .lock()
-        .await
-        .take()
-        .expect("Failed to acquire lock for shutdown signal");
-    tx.send(TaskOutcome::Completed)
-        .expect("Failed to send shutdown signal");
+    if let Some(tx) = state.shutdown_tx.lock().await.take() {
+        tx.send(TaskOutcome::Completed)
+            .expect("Failed to send shutdown signal");
+    }
 
-    HttpResponse::Ok().finish()
+    if let Some(tx) = state.server_shutdown_tx.lock().await.take() {
+        tx.send(()).expect("Failed to send server shutdown signal");
+    }
+
+    StatusCode::OK
 }
 
-#[post("/task/fail")]
 pub async fn task_fail(
-    body: web::Json<TaskFailure>,
-    shutdown_tx: web::Data<Mutex<Option<oneshot::Sender<TaskOutcome>>>>,
-) -> HttpResponse {
+    Extension(state): Extension<Arc<AppState>>,
+    Json(body): Json<TaskFailure>,
+) -> StatusCode {
     println!("Task failed");
     println!("{}", body.description);
 
-    let tx = shutdown_tx
-        .lock()
-        .await
-        .take()
-        .expect("Failed to acquire lock for shutdown signal");
-    tx.send(TaskOutcome::Failure)
-        .expect("Failed to send shutdown signal");
+    if let Some(tx) = state.shutdown_tx.lock().await.take() {
+        tx.send(TaskOutcome::Failure)
+            .expect("Failed to send shutdown signal");
+    }
 
-    HttpResponse::Ok().finish()
+    if let Some(tx) = state.server_shutdown_tx.lock().await.take() {
+        tx.send(()).expect("Failed to send server shutdown signal");
+    }
+
+    StatusCode::OK
 }
+
 /// Send an inquiry to the user and await its answer.
 /// Agents use this endpoint to request clarification on their tasks.
-#[post("/inquiry")]
-pub async fn inquiry(request: web::Json<InquiryPayload>) -> HttpResponse {
+pub async fn inquiry(Json(request): Json<InquiryPayload>) -> Json<String> {
     let question = request.inquiry.clone();
 
     println!("Agent is asking: {question}");
@@ -97,5 +97,5 @@ pub async fn inquiry(request: web::Json<InquiryPayload>) -> HttpResponse {
     .await)
         .unwrap_or_default();
 
-    HttpResponse::Ok().json(answer)
+    Json(answer)
 }

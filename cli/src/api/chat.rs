@@ -1,40 +1,37 @@
 use std::sync::Arc;
 
-use actix_web::{web, Error, HttpRequest, Scope};
-use serde_json::Value;
+use async_trait::async_trait;
+use axum::http::HeaderMap;
+use llm_proxy::{ProxyConfig, ProxyError, ProxyResult};
 
-use llm_proxy::{CompletionRequest, ForwardConfig, ProxyConfig};
+use llm_proxy::{CompletionRequest, ForwardConfig};
 
 use crate::context::Context;
 
-pub fn scope() -> Scope {
-    llm_proxy::scope(TheProxyConfig {})
+pub fn router(ctx: Arc<Context>) -> axum::Router {
+    llm_proxy::scope(TheProxyConfig { ctx })
 }
 
 #[derive(Clone)]
-struct TheProxyConfig {}
+struct TheProxyConfig {
+    ctx: Arc<Context>,
+}
 
+#[async_trait]
 impl ProxyConfig for TheProxyConfig {
     type Context = Arc<Context>;
 
-    async fn extract_context(&self, req: &HttpRequest) -> Result<Self::Context, Error> {
-        let ctx = req
-            .app_data::<web::Data<Context>>()
-            .expect("Context not found in app data");
-        let ctx = ctx.clone().into_inner();
-
-        Ok(ctx)
+    async fn extract_context(&self, _headers: &HeaderMap) -> ProxyResult<Self::Context> {
+        Ok(self.ctx.clone())
     }
 
     async fn forward(
         &self,
         ctx: &Self::Context,
         req: &CompletionRequest,
-    ) -> Result<ForwardConfig, Error> {
+    ) -> ProxyResult<ForwardConfig> {
         let Some(model) = req.model.as_ref() else {
-            return Err(actix_web::error::ErrorBadRequest(
-                "Missing model in request",
-            ));
+            return Err(ProxyError::bad_request("Missing model in request"));
         };
         let (model_name, details) = &ctx.llm_router_table.details_for_model(model);
 
@@ -49,7 +46,7 @@ impl ProxyConfig for TheProxyConfig {
         &self,
         _ctx: &Self::Context,
         request: &CompletionRequest,
-        response: Option<Value>,
+        response: Option<serde_json::Value>,
     ) {
         // For now we just log raw request and response
         // Later we will need to come up with a proper feedback mechanism

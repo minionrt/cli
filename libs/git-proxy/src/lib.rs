@@ -1,4 +1,4 @@
-//! A simple Git proxy integration for Actix Web that forwards Git requests to a Git server.
+//! A simple Git proxy integration for Axum that forwards Git requests to a Git server.
 //! It supports the Git v2 wire protocol via the smart HTTP transfer protocol.
 //! In other words, most modern Git clients should work with this proxy over HTTP.
 //! For authentication, currently only HTTP Basic Authentication is supported, both for the proxy itself and for the upstream Git server.
@@ -10,7 +10,7 @@
 //! # How it Works
 //!
 //! 1. Client requests (e.g. `git clone`, `git push`, `git fetch`) are sent to
-//!    your Actix Web server at the path defined in [`scope`].
+//!    your Axum server at the path defined in [`scope`].
 //! 2. An optional Basic Authentication check (the validator you provide) runs,
 //!    ensuring the request is authorized to access the proxy.
 //!    This check needs to supply a [`ProxyBehaivor`] instance to the request extensions
@@ -31,11 +31,14 @@
 use std::future::Future;
 use std::path::PathBuf;
 
-use actix_web::body::{BoxBody, EitherBody};
-use actix_web::dev::{ServiceFactory, ServiceRequest, ServiceResponse};
-use actix_web::{web, Error};
-use actix_web_httpauth::extractors::basic::BasicAuth;
-use actix_web_httpauth::middleware::HttpAuthentication;
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use axum::middleware::{from_fn, Next};
+use axum::response::{IntoResponse, Response};
+use axum::routing::{get, post};
+use axum::Router;
+use headers::authorization::Basic;
+use headers::{Authorization, HeaderMapExt};
 use url::Url;
 
 mod compression;
@@ -44,11 +47,13 @@ mod routes;
 
 use routes::{git_receive_pack_handler, git_upload_pack_handler, info_refs_handler};
 
+pub use headers::authorization::Basic as BasicAuth;
+
 /// What the proxy should do with the request.
 ///
 /// # Usage
 ///
-/// In your authentication validator function, supply an instance of this struct to the Actix Web request extensions.
+/// In your authentication validator function, supply an instance of this struct to the Axum request extensions.
 /// For usage examples, see the `examples` directory.
 #[derive(Clone)]
 pub struct ProxyBehaivor {
@@ -97,7 +102,7 @@ pub struct ForwardToLocal {
     pub path: PathBuf,
 }
 
-/// Create an `actix_web::Scope` configured to handle the v2 wire protocol over the Git smart HTTP transfer protocol.
+/// Create an Axum `Router` configured to handle the v2 wire protocol over the Git smart HTTP transfer protocol.
 ///
 /// This function sets up the necessary routes (`info/refs`, `git-receive-pack`,
 /// and `git-upload-pack`) under the given `path`, and applies a Basic
@@ -105,7 +110,7 @@ pub struct ForwardToLocal {
 ///
 /// # Invariant
 ///
-/// The `basic_auth_validator` function **MUST** insert a `ForwardRepo` instance into the request extensions.
+/// The `basic_auth_validator` function **MUST** insert a `ProxyBehaivor` instance into the request extensions.
 /// **Otherwise the proxy will panic!**
 ///
 /// # Arguments
@@ -114,29 +119,87 @@ pub struct ForwardToLocal {
 /// * `basic_auth_validator` - A function that validates Basic Authentication credentials for each request.
 /// # Returns
 ///
-/// An `actix_web::Scope` containing the configured Git routes and middleware,
-/// ready to be registered within an Actix `App`.
-pub fn scope<O, F>(
-    path: &str,
-    basic_auth_validator: F,
-) -> actix_web::Scope<
-    impl ServiceFactory<
-        ServiceRequest,
-        Config = (),
-        Response = ServiceResponse<EitherBody<BoxBody>>,
-        Error = actix_web::Error,
-        InitError = (),
-    >,
->
+/// A `Router` containing the configured Git routes and middleware,
+/// ready to be nested within an Axum `Router`.
+pub fn scope<O, F>(path: &str, basic_auth_validator: F) -> Router
 where
-    F: Fn(ServiceRequest, BasicAuth) -> O + 'static,
-    O: Future<Output = Result<ServiceRequest, (Error, ServiceRequest)>> + 'static,
+    F: Fn(Request<Body>, BasicAuth) -> O + Clone + Send + Sync + 'static,
+    O: Future<Output = Result<Request<Body>, ProxyError>> + Send + 'static,
 {
-    let auth_middleware = HttpAuthentication::basic(basic_auth_validator);
+    let validator = basic_auth_validator.clone();
 
-    web::scope(path)
-        .service(info_refs_handler)
-        .service(git_receive_pack_handler)
-        .service(git_upload_pack_handler)
-        .wrap(auth_middleware)
+    let routes = Router::new()
+        .route("/info/refs", get(info_refs_handler))
+        .route("/git-receive-pack", post(git_receive_pack_handler))
+        .route("/git-upload-pack", post(git_upload_pack_handler))
+        .route_layer(from_fn(move |req, next| {
+            let validator = validator.clone();
+            async move { basic_auth_middleware(req, next, validator).await }
+        }));
+
+    if path.is_empty() || path == "/" {
+        routes
+    } else {
+        Router::new().nest(path, routes)
+    }
 }
+
+async fn basic_auth_middleware<F, O>(
+    req: Request<Body>,
+    next: Next,
+    validator: F,
+) -> Result<Response, ProxyError>
+where
+    F: Fn(Request<Body>, BasicAuth) -> O + Clone + Send + Sync + 'static,
+    O: Future<Output = Result<Request<Body>, ProxyError>> + Send + 'static,
+{
+    let auth = req
+        .headers()
+        .typed_get::<Authorization<Basic>>()
+        .ok_or_else(|| ProxyError::unauthorized("Missing Authorization header"))?;
+
+    let req = validator(req, auth.0).await?;
+    Ok(next.run(req).await)
+}
+
+#[derive(Debug)]
+pub struct ProxyError {
+    status: StatusCode,
+    message: Option<String>,
+}
+
+impl ProxyError {
+    pub fn bad_request(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            message: Some(message.into()),
+        }
+    }
+
+    pub fn unauthorized(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::UNAUTHORIZED,
+            message: Some(message.into()),
+        }
+    }
+
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            message: Some(message.into()),
+        }
+    }
+}
+
+impl IntoResponse for ProxyError {
+    fn into_response(self) -> Response {
+        let mut builder = Response::builder().status(self.status);
+        if self.status == StatusCode::UNAUTHORIZED {
+            builder = builder.header(axum::http::header::WWW_AUTHENTICATE, "Basic");
+        }
+        let body = self.message.unwrap_or_default();
+        builder.body(Body::from(body)).unwrap()
+    }
+}
+
+pub type ProxyResult<T> = Result<T, ProxyError>;

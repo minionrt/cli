@@ -1,11 +1,8 @@
+use axum::body::Body;
+use axum::http::Request;
+use axum::Router;
+use git_proxy::{scope, BasicAuth, ForwardToRemote, ProxyBehaivor, ProxyError};
 use std::env;
-
-use actix_web::dev::ServiceRequest;
-use actix_web::error::ErrorUnauthorized;
-use actix_web::{App, Error, HttpMessage, HttpServer};
-use actix_web_httpauth::extractors::basic::BasicAuth;
-
-use git_proxy::{scope, ForwardToRemote, ProxyBehaivor};
 
 // Hard-coded Basic Auth credentials for demonstration.
 const USER: &str = "my-user";
@@ -14,11 +11,11 @@ const ALLOWED_REF: &str = "refs/heads/allow";
 
 /// Validate BasicAuth credentials and, if valid, store a `ProxyBehaivor` in the request extensions.
 async fn basic_auth_validator(
-    req: ServiceRequest,
+    mut req: Request<Body>,
     credentials: BasicAuth,
-) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    let user = credentials.user_id();
-    let pass = credentials.password().unwrap_or("");
+) -> Result<Request<Body>, ProxyError> {
+    let user = credentials.username();
+    let pass = credentials.password();
 
     if user == USER && pass == TOKEN {
         let raw_repo_url = env::var("FORWARD_REPO").expect("FORWARD_REPO must be set");
@@ -41,11 +38,11 @@ async fn basic_auth_validator(
 
         Ok(req)
     } else {
-        Err((ErrorUnauthorized("Invalid username or password"), req))
+        Err(ProxyError::unauthorized("Invalid username or password"))
     }
 }
 
-#[actix_web::main]
+#[tokio::main]
 async fn main() -> std::io::Result<()> {
     env_logger::builder()
         .filter_level(log::LevelFilter::Debug)
@@ -54,8 +51,8 @@ async fn main() -> std::io::Result<()> {
     let bind_addr = "127.0.0.1:8080";
     println!("Starting Git proxy on http://{}", bind_addr);
 
-    HttpServer::new(move || App::new().service(scope("", basic_auth_validator)))
-        .bind(bind_addr)?
-        .run()
-        .await
+    let app = Router::new().merge(scope("", basic_auth_validator));
+
+    let listener = tokio::net::TcpListener::bind(bind_addr).await?;
+    axum::serve(listener, app).await
 }

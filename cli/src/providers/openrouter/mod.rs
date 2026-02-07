@@ -1,10 +1,15 @@
-use actix_web::{get, http::header::LOCATION, web, HttpResponse};
-use actix_web::{middleware, App, HttpServer};
+use axum::extract::Query;
+use axum::http::StatusCode;
+use axum::response::Redirect;
+use axum::routing::get;
+use axum::Extension;
+use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use once_cell::sync::Lazy;
 use rand::RngCore as _;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::sync::Arc;
 use std::time::Duration;
 use tokio::sync::{oneshot, Mutex};
 use url::Url;
@@ -27,6 +32,11 @@ pub struct Context {
     pub web_base_url: Url,
 }
 
+struct OpenRouterState {
+    context: Context,
+    shutdown_tx: Mutex<Option<oneshot::Sender<()>>>,
+}
+
 /// Start a temporary web server for the OpenRouter auth flow.
 pub async fn login_flow(config: Config) -> anyhow::Result<()> {
     let host = "127.0.0.1";
@@ -47,22 +57,21 @@ pub async fn login_flow(config: Config) -> anyhow::Result<()> {
     };
 
     let (shutdown_tx, shutdown_rx) = oneshot::channel::<()>();
-    let shutdown_tx = web::Data::new(Mutex::new(Some(shutdown_tx)));
 
-    let server = HttpServer::new(move || {
-        App::new()
-            .app_data(web::Data::new(context.clone()))
-            .app_data(shutdown_tx.clone())
-            .service(openrouter_connect)
-            .service(openrouter_auth_code)
-            .wrap(middleware::NormalizePath::new(
-                middleware::TrailingSlash::Trim,
-            ))
-            .wrap(middleware::Logger::default())
-    })
-    .bind(bind_addr)?
-    .shutdown_timeout(0)
-    .run();
+    let state = Arc::new(OpenRouterState {
+        context,
+        shutdown_tx: Mutex::new(Some(shutdown_tx)),
+    });
+
+    let app = Router::new()
+        .route("/auth/openrouter", get(openrouter_connect))
+        .route("/auth/openrouter/auth-code", get(openrouter_auth_code))
+        .layer(Extension(state.clone()));
+
+    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    let server = axum::serve(listener, app).with_graceful_shutdown(async {
+        let _ = shutdown_rx.await;
+    });
 
     // Spawn a task to open the login flow URL in the browser after a brief delay.
     // This delay gives the server time to start.
@@ -74,22 +83,19 @@ pub async fn login_flow(config: Config) -> anyhow::Result<()> {
         }
     });
 
-    tokio::select! {
-        _ = shutdown_rx => {}
-        res = server => { res? }
-    }
+    server.await?;
 
     Ok(())
 }
 
 /// This endpoint initiates the OpenRouter login flow by redirecting the user’s browser.
 /// It uses the precomputed PKCE verifier from the context to derive the code challenge.
-#[get("/auth/openrouter")]
-async fn openrouter_connect(context: web::Data<Context>) -> HttpResponse {
-    let code_challenge = code_challenge(&context.code_verifier);
+async fn openrouter_connect(Extension(state): Extension<Arc<OpenRouterState>>) -> Redirect {
+    let code_challenge = code_challenge(&state.context.code_verifier);
 
     let mut location = OAUTH_AUTHORIZE_URL.clone();
-    let callback_url = context
+    let callback_url = state
+        .context
         .web_base_url
         .join("/auth/openrouter/auth-code")
         .unwrap();
@@ -99,9 +105,7 @@ async fn openrouter_connect(context: web::Data<Context>) -> HttpResponse {
         .append_pair("code_challenge", code_challenge.as_str())
         .append_pair("code_challenge_method", "S256");
 
-    HttpResponse::TemporaryRedirect()
-        .append_header((LOCATION, location.as_str()))
-        .finish()
+    Redirect::temporary(location.as_str())
 }
 
 /// Query parameters for the auth-code callback.
@@ -113,30 +117,33 @@ struct AuthCodeQuery {
 /// This endpoint is the callback for the OpenRouter auth flow. It receives the
 /// authorization code, uses the stored PKCE verifier to request an auth key,
 /// saves that key in the config file, and then notifies the user.
-#[get("/auth/openrouter/auth-code")]
 async fn openrouter_auth_code(
-    context: web::Data<Context>,
-    shutdown_tx: web::Data<Mutex<Option<oneshot::Sender<()>>>>,
-    query: web::Query<AuthCodeQuery>,
-) -> HttpResponse {
-    let code_verifier = &context.code_verifier;
+    Extension(state): Extension<Arc<OpenRouterState>>,
+    Query(query): Query<AuthCodeQuery>,
+) -> Result<String, (StatusCode, String)> {
+    let code_verifier = &state.context.code_verifier;
     let key = match auth_key(&query.code, code_verifier).await {
         Ok(key) => key,
         Err(err) => {
-            return HttpResponse::InternalServerError()
-                .body(format!("Failed to get auth key: {err}"));
+            return Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to get auth key: {err}"),
+            ));
         }
     };
 
     // Update the configuration with the obtained key and save it.
-    let mut config = context.config.clone();
+    let mut config = state.context.config.clone();
     config.openrouter_key = Some(key);
     if config.llm_provider.is_none() {
         println!("OpenRouter is now your default LLM provider.");
         config.llm_provider = Some(crate::config::LLMProvider::OpenRouter);
     }
     if let Err(err) = config.save() {
-        return HttpResponse::InternalServerError().body(format!("Failed to save config: {err}"));
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Failed to save config: {err}"),
+        ));
     }
 
     println!();
@@ -149,14 +156,11 @@ async fn openrouter_auth_code(
             .to_string_lossy()
     );
 
-    let tx = shutdown_tx
-        .lock()
-        .await
-        .take()
-        .expect("Failed to acquire lock for shutdown signal");
-    tx.send(()).expect("Failed to send shutdown signal");
+    if let Some(tx) = state.shutdown_tx.lock().await.take() {
+        tx.send(()).expect("Failed to send shutdown signal");
+    }
 
-    HttpResponse::Ok().body("Authentication successful! You can close this window.")
+    Ok("Authentication successful! You can close this window.".to_string())
 }
 
 /// Requests an auth key from OpenRouter by exchanging the authorization code

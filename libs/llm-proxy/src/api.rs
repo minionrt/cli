@@ -1,16 +1,19 @@
+use std::sync::Arc;
 use std::time::Duration;
 
-use actix_web::{
-    body::BoxBody,
-    web::{self, Json},
-    HttpRequest, HttpResponse, Scope,
-};
+use axum::body::Body;
+use axum::extract::Json;
+use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
+use axum::http::{HeaderMap, StatusCode};
+use axum::response::{IntoResponse, Response};
+use axum::routing::post;
+use axum::Router;
 use futures_util::StreamExt;
 use reqwest::Client;
 use url::Url;
 use uuid::Uuid;
 
-use crate::config::{ForwardConfig, ProxyConfig};
+use crate::config::{ForwardConfig, ProxyConfig, ProxyError, ProxyResult};
 use crate::requests::CompletionRequest;
 
 const ROUNDTRIP_TIMEOUT: Duration = Duration::from_secs(5 * 60);
@@ -25,26 +28,33 @@ fn create_reqwest_client() -> Client {
         .expect("Failed to build streaming HTTP client")
 }
 
-pub fn scope<C>(config: C) -> Scope
+pub fn scope<C>(config: C) -> Router
 where
-    C: ProxyConfig + Clone + 'static,
+    C: ProxyConfig + Clone + Send + Sync + 'static,
 {
-    web::scope("/chat").service(web::resource("/completions").route(web::post().to({
-        let config = config.clone();
-        move |req: HttpRequest, body: Json<CompletionRequest>| {
-            let config = config.clone();
-            completions(req, body, config)
-        }
-    })))
+    let config = Arc::new(config);
+    Router::new().nest(
+        "/chat",
+        Router::new().route(
+            "/completions",
+            post({
+                let config = config.clone();
+                move |headers: HeaderMap, Json(body): Json<CompletionRequest>| {
+                    let config = config.clone();
+                    async move { completions(config, headers, body).await }
+                }
+            }),
+        ),
+    )
 }
 
-async fn completions<C: ProxyConfig>(
-    req: HttpRequest,
-    body: Json<CompletionRequest>,
-    config: C,
-) -> actix_web::Result<HttpResponse> {
-    let ctx = config.extract_context(&req).await?;
-    let mut request_payload = body.into_inner();
+async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
+    config: Arc<C>,
+    headers: HeaderMap,
+    body: CompletionRequest,
+) -> ProxyResult<Response> {
+    let ctx = config.extract_context(&headers).await?;
+    let mut request_payload = body;
 
     let ForwardConfig {
         api_key,
@@ -63,7 +73,8 @@ async fn completions<C: ProxyConfig>(
             forward_non_stream_request(&api_key, target_url, &request_payload).await?;
         if let Some(response_json) = &mut response_json {
             patch_response(response_json);
-            resp = resp.set_body(BoxBody::new(response_json.to_string()));
+            let body = response_json.to_string();
+            *resp.body_mut() = Body::from(body);
         }
         config
             .inspect_interaction(&ctx, &request_payload, response_json)
@@ -78,7 +89,7 @@ async fn forward_non_stream_request(
     api_key: &str,
     target_url: Url,
     request_payload: &CompletionRequest,
-) -> actix_web::Result<(HttpResponse, Option<serde_json::Value>)> {
+) -> ProxyResult<(Response, Option<serde_json::Value>)> {
     let client = create_reqwest_client();
     let req_builder = client
         .post(target_url)
@@ -88,23 +99,28 @@ async fn forward_non_stream_request(
 
     let resp = req_builder.send().await.map_err(|err| {
         log::error!("Failed to send request: {:?}", err);
-        actix_web::error::ErrorInternalServerError(err)
+        ProxyError::internal("Failed to send request")
     })?;
 
     let status = resp.status();
     let text_body = resp.text().await.map_err(|err| {
         log::error!("Failed to read response body: {:?}", err);
-        actix_web::error::ErrorInternalServerError(err)
+        ProxyError::internal("Failed to read response body")
     })?;
 
     if status.is_success() {
         let response_json = serde_json::from_str(&text_body).ok();
-        Ok((HttpResponse::Ok().body(text_body), response_json))
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(text_body))
+            .unwrap();
+        Ok((response, response_json))
     } else if status.is_client_error() {
-        Err(actix_web::error::ErrorBadRequest(text_body))
+        Err(ProxyError::bad_request(text_body))
     } else {
         log::error!("Upstream error: status={} body={}", status, text_body);
-        Err(actix_web::error::ErrorInternalServerError(text_body))
+        Err(ProxyError::internal("Upstream error"))
     }
 }
 
@@ -113,7 +129,7 @@ async fn forward_stream_request(
     api_key: &str,
     target_url: Url,
     request_payload: &CompletionRequest,
-) -> HttpResponse {
+) -> Response {
     let client = create_reqwest_client();
     let req_builder = client
         .post(target_url)
@@ -125,7 +141,7 @@ async fn forward_stream_request(
         Ok(r) => r,
         Err(err) => {
             log::error!("Failed to send SSE request: {:?}", err);
-            return HttpResponse::InternalServerError().finish();
+            return StatusCode::INTERNAL_SERVER_ERROR.into_response();
         }
     };
 
@@ -135,14 +151,14 @@ async fn forward_stream_request(
             Ok(b) => b,
             Err(e) => {
                 log::error!("Failed to read SSE error body: {:?}", e);
-                return HttpResponse::InternalServerError().finish();
+                return StatusCode::INTERNAL_SERVER_ERROR.into_response();
             }
         };
         return if status.is_client_error() {
-            HttpResponse::BadRequest().body(text_body)
+            (StatusCode::BAD_REQUEST, text_body).into_response()
         } else {
             log::error!("Upstream SSE error: status={} body={}", status, text_body);
-            HttpResponse::InternalServerError().finish()
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
         };
     }
 
@@ -150,14 +166,16 @@ async fn forward_stream_request(
         Ok(c) => Ok(c),
         Err(err) => {
             log::error!("Error reading SSE chunk: {:?}", err);
-            Err(actix_web::error::ErrorInternalServerError(err))
+            Err(std::io::Error::other(err))
         }
     });
 
-    HttpResponse::Ok()
-        .append_header(("Content-Type", "text/event-stream"))
-        .append_header(("Cache-Control", "no-cache"))
-        .streaming(byte_stream)
+    Response::builder()
+        .status(StatusCode::OK)
+        .header(CONTENT_TYPE, "text/event-stream")
+        .header(CACHE_CONTROL, "no-cache")
+        .body(Body::from_stream(byte_stream))
+        .unwrap()
 }
 
 /// Some providers that offer a mostly but not fully OpenAI-compatible APIs

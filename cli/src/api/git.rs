@@ -1,34 +1,35 @@
-use actix_web::dev::ServiceRequest;
-use actix_web::error::{Error, ErrorUnauthorized};
-use actix_web::web;
-use actix_web::HttpMessage;
-use actix_web_httpauth::extractors::basic::BasicAuth;
+use std::sync::Arc;
 
-use git_proxy::{ForwardToLocal, ProxyBehaivor};
+use axum::body::Body;
+use axum::http::Request;
 
-use crate::context::Context;
+use git_proxy::{BasicAuth, ForwardToLocal, ProxyBehaivor, ProxyError};
+
+use crate::api::AppState;
 
 /// Validator function for Basic authentication
 pub async fn basic_auth_validator(
-    req: ServiceRequest,
+    mut req: Request<Body>,
     credentials: BasicAuth,
-) -> Result<ServiceRequest, (Error, ServiceRequest)> {
-    let ctx = req
-        .app_data::<web::Data<Context>>()
-        .expect("Context not found in app data");
+) -> Result<Request<Body>, ProxyError> {
+    let state = req
+        .extensions()
+        .get::<Arc<AppState>>()
+        .cloned()
+        .ok_or_else(|| ProxyError::internal("Missing app state"))?;
 
-    let password = credentials.password().unwrap_or("");
+    let password = credentials.password();
 
-    if password == ctx.agent_api_key {
+    if password == state.ctx.agent_api_key {
         req.extensions_mut().insert(ProxyBehaivor {
-            allowed_ref: format!("refs/heads/{}", ctx.git_branch.clone()),
+            allowed_ref: format!("refs/heads/{}", state.ctx.git_branch.clone()),
             forward: ForwardToLocal {
-                path: ctx.git_repo_path.clone(),
+                path: state.ctx.git_repo_path.clone(),
             }
             .into(),
         });
         Ok(req)
     } else {
-        Err((ErrorUnauthorized("Invalid username or password"), req))
+        Err(ProxyError::unauthorized("Invalid username or password"))
     }
 }
