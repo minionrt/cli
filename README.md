@@ -11,11 +11,11 @@ Run compatible agents from the command line.
 - Install a Rust toolchain using [rustup.rs](https://rustup.rs/).
 - Clone the repository on your machine:
   ```console
-  git clone --recurse-submodules https://github.com/minionrt/cli
+  git clone --recurse-submodules https://github.com/minionrt/minionrt
   ```
 - To locally install the `minion` executable, run:
   ```console
-  cargo install --path .
+  cargo install --path cli
   ```
   The binary `minion` gets installed to `~/.cargo/bin/minion`; make sure that this directory is in your `$PATH`.
 - Login to one of the supported LLM providers:
