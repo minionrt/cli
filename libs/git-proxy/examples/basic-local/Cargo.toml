@@ -1,0 +1,17 @@
+[package]
+name = "basic-local"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# web
+actix-web = "4"
+actix-web-httpauth = "0.8"
+# git
+tempfile = "3"
+git2 = "0.20"
+# logging
+log = "0.4"
+env_logger = "0.10"
+# workspace members
+git-proxy = { path = "../.." }

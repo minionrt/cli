@@ -1,0 +1,22 @@
+[package]
+name = "git-proxy"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# HTTP
+actix-web = "4"
+actix-web-httpauth = "0.8"
+reqwest = { version = "0.11", features = ["json", "rustls-tls"] }
+bytes = "1"
+base64 = "0.22"
+url = "2"
+flate2 = "1"
+# async
+futures = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "process"] }
+# logging
+log = "0.4"
+# parsing
+nom = "8"
+gix-packetline = { version = "0.18", features = ["blocking-io"] }

@@ -1,0 +1,15 @@
+[package]
+name = "agent-api"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+# data
+serde = { version = "1", features = ["derive"] }
+uuid = "1"
+chrono = { version = "0.4", features = ["serde"] }
+# networking
+url = { version = "2", features = ["serde"] }
+reqwest = { version = "0.12", features = ["json"] }
+# error handling
+thiserror = "1.0"
