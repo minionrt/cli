@@ -24,7 +24,7 @@ Run compatible agents from the command line.
   ```
 - Navigate to any git repository cloned on your local machine and run:
   ```console
-  minion run --nested
+  minion run
   ```
   This will start the [default agent](https://github.com/minionrt/default-minion) and provide it access to the git repository in the current directory.
   Note that it will only have access to content checked into git.

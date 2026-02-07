@@ -1,5 +1,4 @@
 use std::path::Path;
-use std::process::Command;
 
 use bollard::container::{
     AttachContainerOptions, Config, LogOutput, StartContainerOptions, WaitContainerOptions,
@@ -14,7 +13,6 @@ use uuid::Uuid;
 pub struct ContainerConfig {
     pub image: String,
     pub env_vars: Vec<(String, String)>,
-    pub nested: bool,
 }
 
 /// Runtime that uses the local Docker daemon to run containers.
@@ -154,25 +152,9 @@ impl LocalDockerRuntime {
             .map(|(key, value)| format!("{key}={value}"))
             .collect();
 
-        let host_config = {
-            let mut config_host = HostConfig {
-                extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
-                ..Default::default()
-            };
-
-            if config.nested {
-                // On Linux, prefer sysbox if available.
-                if !running_on_windows_or_mac_os() && sysbox_is_installed() {
-                    config_host.runtime = Some("sysbox-runc".to_string());
-                } else {
-                    // Fallback: bind-mount the host Docker socket.
-                    // Note: On Linux, this essentially gives the container full control over the host which is a major security risk.
-                    // On Windows and macOS, the risk is lower because Docker runs in a VM.
-                    config_host.binds =
-                        Some(vec!["/var/run/docker.sock:/var/run/docker.sock".to_string()]);
-                }
-            }
-            config_host
+        let host_config = HostConfig {
+            extra_hosts: Some(vec!["host.docker.internal:host-gateway".to_string()]),
+            ..Default::default()
         };
 
         let container_config = Config {
@@ -256,11 +238,4 @@ impl LocalDockerRuntime {
 
 fn running_on_windows_or_mac_os() -> bool {
     [os_info::Type::Windows, os_info::Type::Macos].contains(&os_info::get().os_type())
-}
-
-fn sysbox_is_installed() -> bool {
-    Command::new("sysbox-runc")
-        .arg("--version")
-        .output()
-        .is_ok()
 }
