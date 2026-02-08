@@ -1,0 +1,62 @@
+# syntax=docker/dockerfile:1
+
+FROM lukemathwalker/cargo-chef:latest-rust-1 AS chef
+WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        pkg-config \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+FROM chef AS planner
+# This Containerfile expects the Docker build context to be the repository root.
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ./libs ./libs
+COPY ./cli ./cli
+COPY ./codex ./codex
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
+COPY --from=planner /app/recipe.json recipe.json
+RUN cargo chef cook --release --recipe-path recipe.json
+
+RUN git clone --depth 1 https://github.com/zed-industries/codex-acp /tmp/codex-acp \
+    && cd /tmp/codex-acp \
+    && cargo build --release
+
+COPY ./Cargo.toml ./Cargo.lock ./
+COPY ./libs ./libs
+COPY ./cli ./cli
+COPY ./codex ./codex
+RUN cargo build -p acp2rt --release
+
+FROM ubuntu:latest AS runtime
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        ca-certificates \
+        git \
+        jq \
+        openssh-client \
+        curl \
+        build-essential \
+        pkg-config \
+        libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+ENV RUSTUP_HOME=/usr/local/rustup \
+    CARGO_HOME=/usr/local/cargo \
+    PATH=/usr/local/cargo/bin:/usr/local/rustup/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile default \
+    && rustup component add rustfmt clippy \
+    && rustup --version \
+    && cargo --version \
+    && rustc --version
+
+COPY --from=builder /app/target/release/acp2rt /usr/local/bin/acp2rt
+COPY --from=builder /tmp/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
+
+COPY ./codex/start-codex-acp.sh /usr/local/bin/start-codex-acp
+RUN chmod +x /usr/local/bin/start-codex-acp
+ENTRYPOINT ["/usr/local/bin/start-codex-acp"]
