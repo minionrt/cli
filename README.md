@@ -1,17 +1,22 @@
 # minionrt CLI
 
-Run compatible agents from the command line.
+Run containerized agents from the command line.
 
-> [!WARNING]
-> This project is in an early state of development.
-> Expect bugs and missing features.
+minionrt runs agents packaged as [OCI Container images](https://opencontainers.org/) (e.g. produced by [Docker](https://www.docker.com/)).
+The running agents have no access to your host environment beyond what your container runtime (e.g. Docker) exposes by default.
+minionrt is intended to be used on local git repositories that are proxied into the container via a git server binding to a container network interface.
+This means only checked in code gets exposed to the agent, no tokens or secrets leaked, no agents reading confidential config files in your host environment.
+
+While competing standards are still rapidly evolving, minionrt currently uses a [custom API](https://github.com/minionrt/spec) for communication between the container and the runtime on the host system.
+However, there is already support for running agents supporting the [Agent Client Protocol (ACP)](https://agentclientprotocol.com).
+For example, [Containerfile.codex](./Containerfile.codex) specifies a working container image for [OpenAI Codex](https://github.com/openai/codex) via [codex-acp](https://github.com/zed-industries/codex-acp).
 
 ## Quickstart
 
 - Install a Rust toolchain using [rustup.rs](https://rustup.rs/).
 - Clone the repository on your machine:
   ```console
-  git clone --recurse-submodules https://github.com/minionrt/minionrt
+  git clone https://github.com/minionrt/minionrt
   ```
 - To locally install the `minion` executable, run:
   ```console
@@ -26,7 +31,7 @@ Run compatible agents from the command line.
   ```console
   minion run
   ```
-  This will start the [default agent](https://github.com/minionrt/default-minion) and provide it access to the git repository in the current directory.
+  This will start the [default agent](Containerfile.codex) which is based on [codex-acp](https://github.com/zed-industries/codex-acp) and [codex](https://github.com/openai/codex) and provide it access to the git repository in the current directory.
   Note that it will only have access to content checked into git.
   Unstaged or ignored files (which may contain secrets) will deliberately **not** be accessible to the agent.
   Use `minion --help` and `minion run --help` for more information on CLI usage.
