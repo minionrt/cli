@@ -24,16 +24,31 @@ static GEMINI_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/responses")
         .expect("Failed to parse Gemini responses URL")
 });
+static OPENAI_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://api.openai.com/v1/chat/completions")
+        .expect("Failed to parse OpenAI chat completions URL")
+});
+static OPENAI_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://api.openai.com/v1/responses").expect("Failed to parse OpenAI responses URL")
+});
 
 #[derive(Clone, Default, Serialize, Deserialize)]
 pub struct Config {
     pub llm_provider: Option<LLMProvider>,
     pub openrouter_key: Option<String>,
     pub google_gemini_key: Option<String>,
+    pub chatgpt_id_token: Option<String>,
+    pub chatgpt_access_token: Option<String>,
+    pub chatgpt_refresh_token: Option<String>,
+    pub chatgpt_last_refresh_unix_secs: Option<i64>,
+    pub chatgpt_api_key: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, Deserialize, Serialize)]
 pub enum LLMProvider {
+    #[serde(rename = "chatgpt")]
+    #[clap(name = "chatgpt")]
+    ChatGpt,
     #[serde(rename = "openrouter")]
     #[clap(name = "openrouter")]
     OpenRouter,
@@ -44,6 +59,7 @@ pub enum LLMProvider {
 impl LLMProvider {
     pub fn tag(&self) -> &'static str {
         match self {
+            LLMProvider::ChatGpt => "chatgpt",
             LLMProvider::OpenRouter => "openrouter",
             LLMProvider::GoogleGemini => "google-gemini",
         }
@@ -53,6 +69,7 @@ impl LLMProvider {
 impl fmt::Display for LLMProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
+            LLMProvider::ChatGpt => write!(f, "ChatGPT"),
             LLMProvider::OpenRouter => write!(f, "OpenRouter"),
             LLMProvider::GoogleGemini => write!(f, "Google Gemini"),
         }
@@ -125,6 +142,20 @@ impl Config {
     pub fn llm_router_table(&self) -> Option<LLMRouterTable> {
         let mut providers = HashMap::new();
 
+        if let Some(api_key) = self
+            .chatgpt_api_key
+            .as_ref()
+            .or(self.chatgpt_access_token.as_ref())
+        {
+            providers.insert(
+                "chatgpt".to_string(),
+                LLMProviderDetails {
+                    api_chat_completions_endpoint: OPENAI_CHAT_COMPLETIONS_URL.clone(),
+                    api_responses_endpoint: OPENAI_RESPONSES_URL.clone(),
+                    api_key: api_key.clone(),
+                },
+            );
+        }
         if let Some(key) = &self.openrouter_key {
             providers.insert(
                 "openrouter".to_string(),
@@ -149,9 +180,13 @@ impl Config {
         let Some(default_llm_provider) = &self.llm_provider else {
             return None;
         };
+        let default_provider = default_llm_provider.tag().to_string();
+        if !providers.contains_key(&default_provider) {
+            return None;
+        }
 
         Some(LLMRouterTable {
-            default_provider: default_llm_provider.tag().to_string(),
+            default_provider,
             providers,
         })
     }

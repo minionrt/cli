@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{Config, LLMProvider};
-use crate::providers::{gemini, openrouter};
+use crate::providers::{chatgpt, gemini, openrouter};
 
 mod editor;
 mod run;
@@ -66,7 +66,16 @@ pub fn exec() {
             message,
             containerfile,
         } => {
-            let config = Config::load_or_create().expect("Failed to load config");
+            let mut config = Config::load_or_create().expect("Failed to load config");
+
+            tokio::runtime::Runtime::new()
+                .expect("Failed to create runtime")
+                .block_on(async {
+                    chatgpt::refresh_if_needed(&mut config)
+                        .await
+                        .expect("Failed to refresh ChatGPT login");
+                });
+
             let Some(llm_router_table) = config.llm_router_table() else {
                 eprintln!("You currently don't have a LLM API key configured.");
                 eprintln!("Run `minion login` to authenticate with a supported provider.");
@@ -114,6 +123,9 @@ pub fn exec() {
                 .block_on(async {
                     let config = Config::load_or_create().expect("Failed to load config");
                     match provider {
+                        LLMProvider::ChatGpt => chatgpt::login_flow(config)
+                            .await
+                            .expect("Failed to start login flow"),
                         LLMProvider::OpenRouter => openrouter::login_flow(config)
                             .await
                             .expect("Failed to start login flow"),
