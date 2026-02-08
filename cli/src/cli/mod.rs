@@ -3,7 +3,7 @@ use std::path::PathBuf;
 use clap::{Parser, Subcommand, ValueEnum};
 
 use crate::config::{Config, LLMProvider};
-use crate::providers::{cohere, gemini, groq, openrouter};
+use crate::providers::{gemini, openrouter};
 
 mod editor;
 mod run;
@@ -117,13 +117,7 @@ pub fn exec() {
                         LLMProvider::OpenRouter => openrouter::login_flow(config)
                             .await
                             .expect("Failed to start login flow"),
-                        LLMProvider::Groq => groq::login_flow(config)
-                            .await
-                            .expect("Failed to start login flow"),
                         LLMProvider::GoogleGemini => gemini::login_flow(config)
-                            .await
-                            .expect("Failed to start login flow"),
-                        LLMProvider::Cohere => cohere::login_flow(config)
                             .await
                             .expect("Failed to start login flow"),
                     }
