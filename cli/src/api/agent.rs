@@ -42,7 +42,7 @@ pub async fn task_complete(
     Extension(state): Extension<Arc<AppState>>,
     Json(body): Json<TaskComplete>,
 ) -> StatusCode {
-    println!("Task completed");
+    println!("\nTask completed");
     println!("{}", body.description);
 
     if let Some(tx) = state.shutdown_tx.lock().await.take() {
