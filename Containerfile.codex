@@ -10,6 +10,11 @@ RUN apt-get update \
         libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
+FROM chef AS codex-acp-builder
+RUN git clone --depth 1 https://github.com/zed-industries/codex-acp /tmp/codex-acp \
+    && cd /tmp/codex-acp \
+    && cargo build --release
+
 FROM chef AS planner
 # This Containerfile expects the Docker build context to be the repository root.
 COPY ./Cargo.toml ./Cargo.lock ./
@@ -21,10 +26,6 @@ RUN cargo chef prepare --recipe-path recipe.json
 FROM chef AS builder
 COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
-
-RUN git clone --depth 1 https://github.com/zed-industries/codex-acp /tmp/codex-acp \
-    && cd /tmp/codex-acp \
-    && cargo build --release
 
 COPY ./Cargo.toml ./Cargo.lock ./
 COPY ./libs ./libs
@@ -42,7 +43,7 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/acp2rt /usr/local/bin/acp2rt
-COPY --from=builder /tmp/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
+COPY --from=codex-acp-builder /tmp/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
 
 COPY ./codex/start-codex-acp.sh /usr/local/bin/start-codex-acp
 RUN chmod +x /usr/local/bin/start-codex-acp
