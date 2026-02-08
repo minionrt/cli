@@ -24,8 +24,6 @@ async fn main() -> anyhow::Result<()> {
     let api_base_url = env::var("MINION_API_BASE_URL")?;
     let api_base_url_parsed = url::Url::parse(&api_base_url)?;
     let api_token = env::var("MINION_API_TOKEN")?;
-    let subcommand_api_base_url = api_base_url.clone();
-    let subcommand_api_token = api_token.clone();
 
     let config = AgentConfig::new(
         {
@@ -35,8 +33,6 @@ async fn main() -> anyhow::Result<()> {
                 if command.len() > 1 {
                     cmd.args(&command[1..]);
                 }
-                cmd.env("OPENAI_API_KEY", &subcommand_api_token);
-                cmd.env("OPENAI_BASE_URL", &subcommand_api_base_url);
                 cmd
             }
         },

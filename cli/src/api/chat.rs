@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use axum::http::HeaderMap;
+use axum::http::{HeaderMap, HeaderName, HeaderValue};
 use llm_proxy::{ProxyConfig, ProxyError, ProxyResult};
 
 use llm_proxy::{CompletionRequest, ForwardConfig};
@@ -39,6 +39,7 @@ impl ProxyConfig for TheProxyConfig {
             api_key: details.api_key.clone(),
             target_url: details.api_chat_completions_endpoint.clone(),
             model: Some(model_name.clone()),
+            extra_headers: build_header_map(details)?,
         })
     }
 
@@ -56,6 +57,22 @@ impl ProxyConfig for TheProxyConfig {
             api_key: details.api_key.clone(),
             target_url: details.api_responses_endpoint.clone(),
             model: Some(model_name.clone()),
+            extra_headers: build_header_map(details)?,
+        })
+    }
+
+    async fn forward_models(&self, ctx: &Self::Context) -> ProxyResult<ForwardConfig> {
+        let details = ctx
+            .llm_router_table
+            .providers
+            .get(&ctx.llm_router_table.default_provider)
+            .expect("Default provider not found");
+
+        Ok(ForwardConfig {
+            api_key: details.api_key.clone(),
+            target_url: details.api_models_endpoint.clone(),
+            model: None,
+            extra_headers: build_header_map(details)?,
         })
     }
 
@@ -80,4 +97,18 @@ impl ProxyConfig for TheProxyConfig {
         // Later we will need to come up with a proper feedback mechanism
         println!("Request: {request:?}\n\nResponse: {response:?}");
     }
+}
+
+fn build_header_map(
+    details: &crate::config::LLMProviderDetails,
+) -> ProxyResult<HeaderMap<HeaderValue>> {
+    let mut headers = HeaderMap::new();
+    for (key, value) in &details.upstream_headers {
+        let name = HeaderName::from_bytes(key.as_bytes())
+            .map_err(|_| ProxyError::internal("Invalid upstream header name"))?;
+        let value = HeaderValue::from_str(value)
+            .map_err(|_| ProxyError::internal("Invalid upstream header value"))?;
+        headers.insert(name, value);
+    }
+    Ok(headers)
 }

@@ -6,7 +6,7 @@ use axum::extract::Json;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::post;
+use axum::routing::{get, post};
 use axum::Router;
 use futures_util::StreamExt;
 use reqwest::Client;
@@ -58,6 +58,16 @@ where
                 }
             }),
         )
+        .route(
+            "/models",
+            get({
+                let config = config.clone();
+                move |headers: HeaderMap| {
+                    let config = config.clone();
+                    async move { models(config, headers).await }
+                }
+            }),
+        )
 }
 
 async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
@@ -72,6 +82,7 @@ async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
         api_key,
         target_url,
         model,
+        extra_headers,
     } = config.forward(&ctx, &request_payload).await?;
     request_payload.model = model.or(request_payload.model);
 
@@ -79,10 +90,11 @@ async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
         config
             .inspect_interaction(&ctx, &request_payload, None)
             .await;
-        Ok(forward_stream_request(&api_key, target_url, &request_payload).await)
+        Ok(forward_stream_request(&api_key, target_url, &extra_headers, &request_payload).await)
     } else {
         let (mut resp, mut response_json) =
-            forward_non_stream_request(&api_key, target_url, &request_payload).await?;
+            forward_non_stream_request(&api_key, target_url, &extra_headers, &request_payload)
+                .await?;
         if let Some(response_json) = &mut response_json {
             patch_response_id(response_json);
             let body = response_json.to_string();
@@ -108,6 +120,7 @@ async fn responses<C: ProxyConfig + Clone + Send + Sync + 'static>(
         api_key,
         target_url,
         model,
+        extra_headers,
     } = config.forward_responses(&ctx, &request_payload).await?;
 
     if let Some(model) = model {
@@ -122,10 +135,11 @@ async fn responses<C: ProxyConfig + Clone + Send + Sync + 'static>(
         config
             .inspect_responses_interaction(&ctx, &request_payload, None)
             .await;
-        Ok(forward_stream_request(&api_key, target_url, &request_payload).await)
+        Ok(forward_stream_request(&api_key, target_url, &extra_headers, &request_payload).await)
     } else {
         let (mut resp, mut response_json) =
-            forward_non_stream_request(&api_key, target_url, &request_payload).await?;
+            forward_non_stream_request(&api_key, target_url, &extra_headers, &request_payload)
+                .await?;
         if let Some(response_json) = &mut response_json {
             patch_response_id(response_json);
             let body = response_json.to_string();
@@ -139,18 +153,38 @@ async fn responses<C: ProxyConfig + Clone + Send + Sync + 'static>(
     }
 }
 
+async fn models<C: ProxyConfig + Clone + Send + Sync + 'static>(
+    config: Arc<C>,
+    headers: HeaderMap,
+) -> ProxyResult<Response> {
+    let ctx = config.extract_context(&headers).await?;
+    let ForwardConfig {
+        api_key,
+        target_url,
+        extra_headers,
+        ..
+    } = config.forward_models(&ctx).await?;
+    forward_get_request(&api_key, target_url, &extra_headers).await
+}
+
 /// Forward a non-streaming request.
 async fn forward_non_stream_request(
     api_key: &str,
     target_url: Url,
+    extra_headers: &HeaderMap,
     request_payload: &(impl Serialize + ?Sized),
 ) -> ProxyResult<(Response, Option<serde_json::Value>)> {
     let client = create_reqwest_client();
-    let req_builder = client
+    let mut req_builder = client
         .post(target_url)
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&request_payload);
+    for (key, value) in extra_headers {
+        if let Ok(value_str) = value.to_str() {
+            req_builder = req_builder.header(key.as_str(), value_str);
+        }
+    }
 
     let resp = req_builder.send().await.map_err(|err| {
         log::error!("Failed to send request: {:?}", err);
@@ -179,18 +213,62 @@ async fn forward_non_stream_request(
     }
 }
 
+/// Forward a GET request.
+async fn forward_get_request(
+    api_key: &str,
+    target_url: Url,
+    extra_headers: &HeaderMap,
+) -> ProxyResult<Response> {
+    let client = create_reqwest_client();
+    let mut req_builder = client.get(target_url).bearer_auth(api_key);
+    for (key, value) in extra_headers {
+        if let Ok(value_str) = value.to_str() {
+            req_builder = req_builder.header(key.as_str(), value_str);
+        }
+    }
+    let resp = req_builder.send().await.map_err(|err| {
+        log::error!("Failed to send GET request: {:?}", err);
+        ProxyError::internal("Failed to send request")
+    })?;
+
+    let status = resp.status();
+    let text_body = resp.text().await.map_err(|err| {
+        log::error!("Failed to read response body: {:?}", err);
+        ProxyError::internal("Failed to read response body")
+    })?;
+
+    if status.is_success() {
+        Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json")
+            .body(Body::from(text_body))
+            .unwrap())
+    } else if status.is_client_error() {
+        Err(ProxyError::bad_request(text_body))
+    } else {
+        log::error!("Upstream error: status={} body={}", status, text_body);
+        Err(ProxyError::internal("Upstream error"))
+    }
+}
+
 /// Forward a streaming (SSE) request.
 async fn forward_stream_request(
     api_key: &str,
     target_url: Url,
+    extra_headers: &HeaderMap,
     request_payload: &(impl Serialize + ?Sized),
 ) -> Response {
     let client = create_reqwest_client();
-    let req_builder = client
+    let mut req_builder = client
         .post(target_url)
         .bearer_auth(api_key)
         .header("Content-Type", "application/json")
         .json(&request_payload);
+    for (key, value) in extra_headers {
+        if let Ok(value_str) = value.to_str() {
+            req_builder = req_builder.header(key.as_str(), value_str);
+        }
+    }
 
     let resp = match req_builder.send().await {
         Ok(r) => r,

@@ -15,6 +15,7 @@ FROM chef AS planner
 COPY ./Cargo.toml ./Cargo.lock ./
 COPY ./libs ./libs
 COPY ./cli ./cli
+COPY ./codex ./codex
 RUN cargo chef prepare --recipe-path recipe.json
 
 FROM chef AS builder
@@ -28,6 +29,7 @@ RUN git clone --depth 1 https://github.com/zed-industries/codex-acp /tmp/codex-a
 COPY ./Cargo.toml ./Cargo.lock ./
 COPY ./libs ./libs
 COPY ./cli ./cli
+COPY ./codex ./codex
 RUN cargo build -p acp2rt --release
 
 FROM debian:trixie-slim AS runtime
@@ -36,10 +38,13 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
         git \
+        jq \
         openssh-client \
     && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/acp2rt /usr/local/bin/acp2rt
 COPY --from=builder /tmp/codex-acp/target/release/codex-acp /usr/local/bin/codex-acp
 
-ENTRYPOINT ["/usr/local/bin/acp2rt", "--workspace-path", "/workspace", "--", "/usr/local/bin/codex-acp", "-c", "model_provider=\"minionrt\"", "-c", "model_providers.minionrt.base_url=\"${MINION_API_BASE_URL}\"", "-c", "model_providers.minionrt.name=minionrt", "-c", "model_providers.minionrt.env_key=\"OPENAI_API_KEY\"", "-c", "model_providers.minionrt.wire_api=\"responses\""]
+COPY ./codex/start-codex-acp.sh /usr/local/bin/start-codex-acp
+RUN chmod +x /usr/local/bin/start-codex-acp
+ENTRYPOINT ["/usr/local/bin/start-codex-acp"]

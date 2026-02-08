@@ -31,6 +31,13 @@ pub trait ProxyConfig: Send + Sync + 'static {
         ))
     }
 
+    /// Configure how to forward an OpenAI Models API request.
+    async fn forward_models(&self, _ctx: &Self::Context) -> ProxyResult<ForwardConfig> {
+        Err(ProxyError::bad_request(
+            "Models API forwarding is not configured",
+        ))
+    }
+
     /// Optionally handle the interaction after the reqest has been forwarded.
     /// In a streaming scenario, the response will be `None`.
     async fn inspect_interaction(
@@ -89,4 +96,5 @@ pub struct ForwardConfig {
     pub api_key: String,
     pub target_url: Url,
     pub model: Option<String>,
+    pub extra_headers: HeaderMap,
 }

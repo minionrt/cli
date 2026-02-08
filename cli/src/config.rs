@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use std::{collections::HashMap, fs};
 
 use anyhow::anyhow;
+use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use url::Url;
@@ -15,6 +16,10 @@ static OPENROUTER_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://openrouter.ai/api/v1/responses")
         .expect("Failed to parse OpenRouter responses URL")
 });
+static OPENROUTER_MODELS_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://openrouter.ai/api/v1/models")
+        .expect("Failed to parse OpenRouter models URL")
+});
 
 static GEMINI_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
@@ -24,12 +29,17 @@ static GEMINI_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/responses")
         .expect("Failed to parse Gemini responses URL")
 });
-static OPENAI_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
-    Url::parse("https://api.openai.com/v1/chat/completions")
-        .expect("Failed to parse OpenAI chat completions URL")
+static GEMINI_MODELS_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/models")
+        .expect("Failed to parse Gemini models URL")
 });
-static OPENAI_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
-    Url::parse("https://api.openai.com/v1/responses").expect("Failed to parse OpenAI responses URL")
+static CHATGPT_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://chatgpt.com/backend-api/codex/responses")
+        .expect("Failed to parse ChatGPT responses URL")
+});
+static CHATGPT_MODELS_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://chatgpt.com/backend-api/codex/models")
+        .expect("Failed to parse ChatGPT models URL")
 });
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -38,10 +48,10 @@ pub struct Config {
     pub openrouter_key: Option<String>,
     pub google_gemini_key: Option<String>,
     pub chatgpt_id_token: Option<String>,
+    pub chatgpt_account_id: Option<String>,
     pub chatgpt_access_token: Option<String>,
     pub chatgpt_refresh_token: Option<String>,
     pub chatgpt_last_refresh_unix_secs: Option<i64>,
-    pub chatgpt_api_key: Option<String>,
 }
 
 #[derive(clap::ValueEnum, Clone, Debug, Deserialize, Serialize)]
@@ -104,7 +114,21 @@ impl LLMRouterTable {
 pub struct LLMProviderDetails {
     pub api_chat_completions_endpoint: Url,
     pub api_responses_endpoint: Url,
+    pub api_models_endpoint: Url,
     pub api_key: String,
+    pub upstream_headers: HashMap<String, String>,
+}
+
+#[derive(Deserialize)]
+struct IdClaims {
+    #[serde(rename = "https://api.openai.com/auth", default)]
+    auth: Option<AuthClaims>,
+}
+
+#[derive(Deserialize)]
+struct AuthClaims {
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
 }
 
 impl Config {
@@ -142,17 +166,25 @@ impl Config {
     pub fn llm_router_table(&self) -> Option<LLMRouterTable> {
         let mut providers = HashMap::new();
 
-        if let Some(api_key) = self
-            .chatgpt_api_key
-            .as_ref()
-            .or(self.chatgpt_access_token.as_ref())
-        {
+        if let Some(api_key) = self.chatgpt_access_token.as_ref() {
+            let mut upstream_headers = HashMap::new();
+            let account_id = self.chatgpt_account_id.clone().or_else(|| {
+                self.chatgpt_id_token
+                    .as_deref()
+                    .and_then(extract_account_id_from_id_token)
+            });
+            if let Some(account_id) = account_id {
+                upstream_headers.insert("ChatGPT-Account-ID".to_string(), account_id.clone());
+            }
             providers.insert(
                 "chatgpt".to_string(),
                 LLMProviderDetails {
-                    api_chat_completions_endpoint: OPENAI_CHAT_COMPLETIONS_URL.clone(),
-                    api_responses_endpoint: OPENAI_RESPONSES_URL.clone(),
+                    // ChatGPT OAuth tokens are scoped for ChatGPT backend, not api.openai.com.
+                    api_chat_completions_endpoint: CHATGPT_RESPONSES_URL.clone(),
+                    api_responses_endpoint: CHATGPT_RESPONSES_URL.clone(),
+                    api_models_endpoint: CHATGPT_MODELS_URL.clone(),
                     api_key: api_key.clone(),
+                    upstream_headers,
                 },
             );
         }
@@ -162,7 +194,9 @@ impl Config {
                 LLMProviderDetails {
                     api_chat_completions_endpoint: OPENROUTER_CHAT_COMPLETIONS_URL.clone(),
                     api_responses_endpoint: OPENROUTER_RESPONSES_URL.clone(),
+                    api_models_endpoint: OPENROUTER_MODELS_URL.clone(),
                     api_key: key.clone(),
+                    upstream_headers: HashMap::new(),
                 },
             );
         }
@@ -172,7 +206,9 @@ impl Config {
                 LLMProviderDetails {
                     api_chat_completions_endpoint: GEMINI_CHAT_COMPLETIONS_URL.clone(),
                     api_responses_endpoint: GEMINI_RESPONSES_URL.clone(),
+                    api_models_endpoint: GEMINI_MODELS_URL.clone(),
                     api_key: key.clone(),
+                    upstream_headers: HashMap::new(),
                 },
             );
         }
@@ -190,4 +226,11 @@ impl Config {
             providers,
         })
     }
+}
+
+fn extract_account_id_from_id_token(id_token: &str) -> Option<String> {
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let payload = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let claims: IdClaims = serde_json::from_slice(&payload).ok()?;
+    claims.auth.and_then(|auth| auth.chatgpt_account_id)
 }

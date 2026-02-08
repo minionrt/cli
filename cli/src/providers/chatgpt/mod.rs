@@ -64,17 +64,24 @@ struct RefreshResponse {
     refresh_token: Option<String>,
 }
 
+#[derive(Deserialize)]
+struct IdClaims {
+    #[serde(rename = "https://api.openai.com/auth", default)]
+    auth: Option<AuthClaims>,
+}
+
+#[derive(Deserialize)]
+struct AuthClaims {
+    #[serde(default)]
+    chatgpt_account_id: Option<String>,
+}
+
 #[derive(Serialize)]
 struct RefreshRequest<'a> {
     client_id: &'a str,
     grant_type: &'a str,
     refresh_token: &'a str,
     scope: &'a str,
-}
-
-#[derive(Deserialize)]
-struct TokenExchangeResponse {
-    access_token: String,
 }
 
 pub async fn login_flow(config: Config) -> anyhow::Result<()> {
@@ -154,6 +161,7 @@ pub async fn refresh_if_needed(config: &mut Config) -> anyhow::Result<()> {
         .await?;
 
     if let Some(id_token) = response.id_token {
+        config.chatgpt_account_id = extract_account_id_from_id_token(&id_token);
         config.chatgpt_id_token = Some(id_token);
     }
     if let Some(access_token) = response.access_token {
@@ -208,9 +216,7 @@ async fn chatgpt_callback(
             })?;
 
     let mut config = state.context.config.clone();
-    if let Ok(api_key) = exchange_api_key(&tokens.id_token).await {
-        config.chatgpt_api_key = Some(api_key);
-    }
+    config.chatgpt_account_id = extract_account_id_from_id_token(&tokens.id_token);
     config.chatgpt_id_token = Some(tokens.id_token);
     config.chatgpt_access_token = Some(tokens.access_token);
     config.chatgpt_refresh_token = Some(tokens.refresh_token);
@@ -282,26 +288,6 @@ async fn exchange_code_for_tokens(
         .await
 }
 
-async fn exchange_api_key(id_token: &str) -> reqwest::Result<String> {
-    let response = reqwest::Client::new()
-        .post(OAUTH_TOKEN_URL.as_str())
-        .header("Content-Type", "application/x-www-form-urlencoded")
-        .body(format!(
-            "grant_type={}&client_id={}&requested_token={}&subject_token={}&subject_token_type={}",
-            urlencoding::encode("urn:ietf:params:oauth:grant-type:token-exchange"),
-            urlencoding::encode(CHATGPT_OAUTH_CLIENT_ID),
-            urlencoding::encode("openai-api-key"),
-            urlencoding::encode(id_token),
-            urlencoding::encode("urn:ietf:params:oauth:token-type:id_token"),
-        ))
-        .send()
-        .await?
-        .error_for_status()?
-        .json::<TokenExchangeResponse>()
-        .await?;
-    Ok(response.access_token)
-}
-
 async fn bind_listener(start_port: u16) -> anyhow::Result<tokio::net::TcpListener> {
     for port in start_port..=u16::MAX {
         if let Ok(listener) = tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
@@ -336,4 +322,12 @@ fn code_verifier() -> String {
 fn code_challenge(verifier: &str) -> String {
     let hash = Sha256::digest(verifier.as_bytes());
     URL_SAFE_NO_PAD.encode(hash)
+}
+
+fn extract_account_id_from_id_token(id_token: &str) -> Option<String> {
+    // JWT format is "header.payload.signature"; we only need payload claims.
+    let payload_b64 = id_token.split('.').nth(1)?;
+    let payload = URL_SAFE_NO_PAD.decode(payload_b64).ok()?;
+    let claims: IdClaims = serde_json::from_slice(&payload).ok()?;
+    claims.auth.and_then(|auth| auth.chatgpt_account_id)
 }
