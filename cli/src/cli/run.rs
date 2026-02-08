@@ -85,7 +85,16 @@ pub async fn run<P: AsRef<Path>>(
         return Ok(());
     }
 
-    squash_merge_branch(path, &base_branch, &fork_branch)?;
+    if let Err(err) = squash_merge_branch(path, &base_branch, &fork_branch) {
+        eprintln!();
+        eprintln!("Unable to squash-merge task branch into {base_branch}.");
+        eprintln!("Reason: {err}");
+        eprintln!("Task branch: {fork_branch}");
+        eprintln!("You could switch to the task branch:");
+        eprintln!("  git switch {fork_branch}");
+        eprintln!("Or manually squash-merge and leave changes unstaged:");
+        eprintln!("  git merge --squash {fork_branch} && git reset");
+    }
     Ok(())
 }
 
