@@ -127,7 +127,7 @@ fn squash_merge_branch<P: AsRef<Path>>(path: P, base: &str, fork: &str) -> anyho
             || s.contains(git2::Status::WT_RENAMED)
             || s.contains(git2::Status::WT_TYPECHANGE)
     }) {
-        return Err(anyhow!("Working directory has unstaged changes; aborting."));
+        return Err(anyhow!("Working directory has unstaged changes."));
     }
 
     // Verify the current branch is the base branch. If not, check it out.
@@ -159,7 +159,7 @@ fn squash_merge_branch<P: AsRef<Path>>(path: P, base: &str, fork: &str) -> anyho
     // leaving the changes unstaged on the base branch.
     let mut apply_opts = git2::ApplyOptions::new();
     repo.apply(&diff, git2::ApplyLocation::WorkDir, Some(&mut apply_opts))
-        .map_err(|_| anyhow!("Merge conflict encountered; aborting."))?;
+        .map_err(|_| anyhow!("Merge conflict encountered."))?;
 
     Ok(())
 }
