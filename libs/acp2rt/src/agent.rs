@@ -204,7 +204,8 @@ impl Agent {
         let mut cmd = (self.command_factory)();
         cmd.stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::inherit());
+            .stderr(std::process::Stdio::inherit())
+            .current_dir(workspace);
 
         let mut child = cmd.spawn().context("failed to spawn ACP agent")?;
         let stdin = child.stdin.take().context("ACP agent stdin unavailable")?;

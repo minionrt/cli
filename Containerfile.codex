@@ -33,7 +33,6 @@ COPY ./codex ./codex
 RUN cargo build -p acp2rt --release
 
 FROM debian:trixie-slim AS runtime
-WORKDIR /app
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
         ca-certificates \
