@@ -82,9 +82,7 @@ impl ProxyConfig for TheProxyConfig {
         request: &CompletionRequest,
         response: Option<serde_json::Value>,
     ) {
-        // For now we just log raw request and response
-        // Later we will need to come up with a proper feedback mechanism
-        println!("Request: {request:?}\n\nResponse: {response:?}");
+        log::trace!("Request: {request:?}\n\nResponse: {response:?}");
     }
 
     async fn inspect_responses_interaction(
@@ -93,9 +91,7 @@ impl ProxyConfig for TheProxyConfig {
         request: &serde_json::Value,
         response: Option<serde_json::Value>,
     ) {
-        // For now we just log raw request and response
-        // Later we will need to come up with a proper feedback mechanism
-        println!("Request: {request:?}\n\nResponse: {response:?}");
+        log::trace!("Request: {request:?}\n\nResponse: {response:?}");
     }
 }
 
