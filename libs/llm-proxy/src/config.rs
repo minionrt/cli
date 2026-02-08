@@ -20,6 +20,17 @@ pub trait ProxyConfig: Send + Sync + 'static {
         req: &CompletionRequest,
     ) -> ProxyResult<ForwardConfig>;
 
+    /// Configure how to forward an OpenAI Responses API request.
+    async fn forward_responses(
+        &self,
+        _ctx: &Self::Context,
+        _req: &serde_json::Value,
+    ) -> ProxyResult<ForwardConfig> {
+        Err(ProxyError::bad_request(
+            "Responses API forwarding is not configured",
+        ))
+    }
+
     /// Optionally handle the interaction after the reqest has been forwarded.
     /// In a streaming scenario, the response will be `None`.
     async fn inspect_interaction(
@@ -28,6 +39,16 @@ pub trait ProxyConfig: Send + Sync + 'static {
         req: &CompletionRequest,
         response: Option<serde_json::Value>,
     );
+
+    /// Optionally handle OpenAI Responses API interactions after forwarding.
+    /// In a streaming scenario, the response will be `None`.
+    async fn inspect_responses_interaction(
+        &self,
+        _ctx: &Self::Context,
+        _req: &serde_json::Value,
+        _response: Option<serde_json::Value>,
+    ) {
+    }
 }
 
 #[derive(Debug)]

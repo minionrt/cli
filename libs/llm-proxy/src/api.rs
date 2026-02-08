@@ -10,6 +10,7 @@ use axum::routing::post;
 use axum::Router;
 use futures_util::StreamExt;
 use reqwest::Client;
+use serde::Serialize;
 use url::Url;
 use uuid::Uuid;
 
@@ -33,19 +34,30 @@ where
     C: ProxyConfig + Clone + Send + Sync + 'static,
 {
     let config = Arc::new(config);
-    Router::new().nest(
-        "/chat",
-        Router::new().route(
-            "/completions",
+    Router::new()
+        .nest(
+            "/chat",
+            Router::new().route(
+                "/completions",
+                post({
+                    let config = config.clone();
+                    move |headers: HeaderMap, Json(body): Json<CompletionRequest>| {
+                        let config = config.clone();
+                        async move { completions(config, headers, body).await }
+                    }
+                }),
+            ),
+        )
+        .route(
+            "/responses",
             post({
                 let config = config.clone();
-                move |headers: HeaderMap, Json(body): Json<CompletionRequest>| {
+                move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
                     let config = config.clone();
-                    async move { completions(config, headers, body).await }
+                    async move { responses(config, headers, body).await }
                 }
             }),
-        ),
-    )
+        )
 }
 
 async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
@@ -72,7 +84,7 @@ async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
         let (mut resp, mut response_json) =
             forward_non_stream_request(&api_key, target_url, &request_payload).await?;
         if let Some(response_json) = &mut response_json {
-            patch_response(response_json);
+            patch_response_id(response_json);
             let body = response_json.to_string();
             *resp.body_mut() = Body::from(body);
         }
@@ -84,11 +96,54 @@ async fn completions<C: ProxyConfig + Clone + Send + Sync + 'static>(
     }
 }
 
+async fn responses<C: ProxyConfig + Clone + Send + Sync + 'static>(
+    config: Arc<C>,
+    headers: HeaderMap,
+    body: serde_json::Value,
+) -> ProxyResult<Response> {
+    let ctx = config.extract_context(&headers).await?;
+    let mut request_payload = body;
+
+    let ForwardConfig {
+        api_key,
+        target_url,
+        model,
+    } = config.forward_responses(&ctx, &request_payload).await?;
+
+    if let Some(model) = model {
+        set_model(&mut request_payload, model)?;
+    }
+
+    if request_payload
+        .get("stream")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false)
+    {
+        config
+            .inspect_responses_interaction(&ctx, &request_payload, None)
+            .await;
+        Ok(forward_stream_request(&api_key, target_url, &request_payload).await)
+    } else {
+        let (mut resp, mut response_json) =
+            forward_non_stream_request(&api_key, target_url, &request_payload).await?;
+        if let Some(response_json) = &mut response_json {
+            patch_response_id(response_json);
+            let body = response_json.to_string();
+            *resp.body_mut() = Body::from(body);
+        }
+        config
+            .inspect_responses_interaction(&ctx, &request_payload, response_json)
+            .await;
+
+        Ok(resp)
+    }
+}
+
 /// Forward a non-streaming request.
 async fn forward_non_stream_request(
     api_key: &str,
     target_url: Url,
-    request_payload: &CompletionRequest,
+    request_payload: &(impl Serialize + ?Sized),
 ) -> ProxyResult<(Response, Option<serde_json::Value>)> {
     let client = create_reqwest_client();
     let req_builder = client
@@ -128,7 +183,7 @@ async fn forward_non_stream_request(
 async fn forward_stream_request(
     api_key: &str,
     target_url: Url,
-    request_payload: &CompletionRequest,
+    request_payload: &(impl Serialize + ?Sized),
 ) -> Response {
     let client = create_reqwest_client();
     let req_builder = client
@@ -182,7 +237,7 @@ async fn forward_stream_request(
 /// One example is Google Gemini's API, which does not include the `id` field in the response.
 /// Since clients may expect this field to be present when deserializing the response, we patch the response
 /// by adding the `id` field with a dummy value.
-fn patch_response(response_json: &mut serde_json::Value) {
+fn patch_response_id(response_json: &mut serde_json::Value) {
     if let Some(obj) = response_json.as_object_mut() {
         if obj.get("id").is_none() {
             obj.insert(
@@ -191,4 +246,14 @@ fn patch_response(response_json: &mut serde_json::Value) {
             );
         }
     }
+}
+
+fn set_model(request_payload: &mut serde_json::Value, model: String) -> ProxyResult<()> {
+    let Some(request_obj) = request_payload.as_object_mut() else {
+        return Err(ProxyError::bad_request(
+            "Request body must be a JSON object",
+        ));
+    };
+    request_obj.insert("model".to_string(), serde_json::Value::String(model));
+    Ok(())
 }

@@ -42,10 +42,38 @@ impl ProxyConfig for TheProxyConfig {
         })
     }
 
+    async fn forward_responses(
+        &self,
+        ctx: &Self::Context,
+        req: &serde_json::Value,
+    ) -> ProxyResult<ForwardConfig> {
+        let Some(model) = req.get("model").and_then(|v| v.as_str()) else {
+            return Err(ProxyError::bad_request("Missing model in request"));
+        };
+        let (model_name, details) = &ctx.llm_router_table.details_for_model(model);
+
+        Ok(ForwardConfig {
+            api_key: details.api_key.clone(),
+            target_url: details.api_responses_endpoint.clone(),
+            model: Some(model_name.clone()),
+        })
+    }
+
     async fn inspect_interaction(
         &self,
         _ctx: &Self::Context,
         request: &CompletionRequest,
+        response: Option<serde_json::Value>,
+    ) {
+        // For now we just log raw request and response
+        // Later we will need to come up with a proper feedback mechanism
+        println!("Request: {request:?}\n\nResponse: {response:?}");
+    }
+
+    async fn inspect_responses_interaction(
+        &self,
+        _ctx: &Self::Context,
+        request: &serde_json::Value,
         response: Option<serde_json::Value>,
     ) {
         // For now we just log raw request and response

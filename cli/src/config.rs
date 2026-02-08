@@ -11,20 +11,36 @@ static OPENROUTER_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://openrouter.ai/api/v1/chat/completions")
         .expect("Failed to parse OpenRouter chat completions URL")
 });
+static OPENROUTER_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://openrouter.ai/api/v1/responses")
+        .expect("Failed to parse OpenRouter responses URL")
+});
 
 static GROQ_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://api.groq.com/openai/v1/chat/completions")
         .expect("Failed to parse Groq chat completions URL")
+});
+static GROQ_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://api.groq.com/openai/v1/responses")
+        .expect("Failed to parse Groq responses URL")
 });
 
 static GEMINI_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/chat/completions")
         .expect("Failed to parse Gemini chat completions URL")
 });
+static GEMINI_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://generativelanguage.googleapis.com/v1beta/openai/responses")
+        .expect("Failed to parse Gemini responses URL")
+});
 
 static COHERE_CHAT_COMPLETIONS_URL: Lazy<Url> = Lazy::new(|| {
     Url::parse("https://api.cohere.ai/compatibility/v1/chat/completions")
         .expect("Failed to parse Cohere chat completions URL")
+});
+static COHERE_RESPONSES_URL: Lazy<Url> = Lazy::new(|| {
+    Url::parse("https://api.cohere.ai/compatibility/v1/responses")
+        .expect("Failed to parse Cohere responses URL")
 });
 
 #[derive(Clone, Default, Serialize, Deserialize)]
@@ -98,6 +114,7 @@ impl LLMRouterTable {
 
 pub struct LLMProviderDetails {
     pub api_chat_completions_endpoint: Url,
+    pub api_responses_endpoint: Url,
     pub api_key: String,
 }
 
@@ -141,6 +158,7 @@ impl Config {
                 "openrouter".to_string(),
                 LLMProviderDetails {
                     api_chat_completions_endpoint: OPENROUTER_CHAT_COMPLETIONS_URL.clone(),
+                    api_responses_endpoint: OPENROUTER_RESPONSES_URL.clone(),
                     api_key: key.clone(),
                 },
             );
@@ -150,6 +168,7 @@ impl Config {
                 "groq".to_string(),
                 LLMProviderDetails {
                     api_chat_completions_endpoint: GROQ_CHAT_COMPLETIONS_URL.clone(),
+                    api_responses_endpoint: GROQ_RESPONSES_URL.clone(),
                     api_key: key.clone(),
                 },
             );
@@ -159,6 +178,7 @@ impl Config {
                 "google-gemini".to_string(),
                 LLMProviderDetails {
                     api_chat_completions_endpoint: GEMINI_CHAT_COMPLETIONS_URL.clone(),
+                    api_responses_endpoint: GEMINI_RESPONSES_URL.clone(),
                     api_key: key.clone(),
                 },
             );
@@ -168,6 +188,7 @@ impl Config {
                 "cohere".to_string(),
                 LLMProviderDetails {
                     api_chat_completions_endpoint: COHERE_CHAT_COMPLETIONS_URL.clone(),
+                    api_responses_endpoint: COHERE_RESPONSES_URL.clone(),
                     api_key: key.clone(),
                 },
             );
