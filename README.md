@@ -27,6 +27,8 @@ For example, [Containerfile.codex](./Containerfile.codex) specifies a working co
   ```console
   minion login --help
   ```
+  > [!NOTE]
+  > Codex is currently only supported with `minion login chatgpt` as it relies on [OpenAI's responses API](https://platform.openai.com/docs/api-reference/responses) which is not yet fully supported by other providers.
 - Navigate to any git repository cloned on your local machine and run:
   ```console
   minion run
