@@ -7,4 +7,5 @@ members = [
     "libs/git-proxy/examples/basic-local",
     "libs/agent-api",
     "libs/llm-proxy",
+    "libs/acp2rt",
 ]

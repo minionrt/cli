@@ -1,0 +1,14 @@
+[package]
+name = "acp2rt"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+agent-client-protocol = "0.9"
+agent-api = { path = "../agent-api" }
+anyhow = "1"
+async-trait = "0.1"
+clap = { version = "4", features = ["derive"] }
+tokio = { version = "1", features = ["fs", "macros", "process", "rt"] }
+tokio-util = { version = "0.7", features = ["compat"] }
+url = "2"
