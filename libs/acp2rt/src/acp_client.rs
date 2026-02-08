@@ -1,11 +1,7 @@
 use std::io::{self, Write};
 use std::path::{Path, PathBuf};
 
-use agent_client_protocol::{
-    Client, ContentBlock, ReadTextFileRequest, ReadTextFileResponse, RequestPermissionOutcome,
-    RequestPermissionRequest, RequestPermissionResponse, SelectedPermissionOutcome,
-    SessionNotification, SessionUpdate, WriteTextFileRequest, WriteTextFileResponse,
-};
+use agent_client_protocol::*;
 use async_trait::async_trait;
 
 use crate::AcpResult;
@@ -87,14 +83,40 @@ impl ACPClient {
             SessionUpdate::AgentThoughtChunk(chunk) => {
                 forward_content_to_stderr(&chunk.content);
             }
-            update => {
-                eprintln!(
-                    "[acp2rt] session update {:?}: {:?}",
-                    notification.session_id, update
-                );
+            SessionUpdate::ToolCall(tool_call) => {
+                forward_tool_call(tool_call);
             }
+            SessionUpdate::Plan(plan) => {
+                if plan.entries.is_empty() {
+                    eprintln!("[plan] cleared");
+                } else {
+                    let mut pending = 0usize;
+                    let mut in_progress = 0usize;
+                    let mut completed = 0usize;
+                    for entry in &plan.entries {
+                        match entry.status {
+                            agent_client_protocol::PlanEntryStatus::Pending => pending += 1,
+                            agent_client_protocol::PlanEntryStatus::InProgress => in_progress += 1,
+                            agent_client_protocol::PlanEntryStatus::Completed => completed += 1,
+                            _ => (),
+                        }
+                    }
+                    eprintln!(
+                        "[plan] {} item(s): {} pending, {} in progress, {} completed",
+                        plan.entries.len(),
+                        pending,
+                        in_progress,
+                        completed
+                    );
+                }
+            }
+            _ => (),
         }
     }
+}
+
+fn forward_tool_call(tool_call: &ToolCall) {
+    eprintln!("\n[tool call] {}", tool_call.title);
 }
 
 fn forward_content_to_stdout(content: &ContentBlock) {
