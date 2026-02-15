@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 
 use crate::config::{Config, LLMProvider};
 use crate::providers::{chatgpt, gemini, openrouter};
@@ -8,36 +8,54 @@ use crate::providers::{chatgpt, gemini, openrouter};
 mod editor;
 mod run;
 
+#[derive(Args, Debug, Clone, Default)]
+struct RunArgs {
+    /// Task description
+    #[arg(short = 'm', long, global = true, help_heading = "Run Options")]
+    message: Option<String>,
+
+    /// Use the Containerfile located at the specified path
+    #[arg(long, global = true, help_heading = "Run Options")]
+    containerfile: Option<PathBuf>,
+}
+
 #[derive(Subcommand)]
 enum Command {
     /// Run a task in the current directory
-    #[clap(name = "run", alias = "")]
-    Run {
-        /// Task description
-        #[clap(short = 'm')]
-        message: Option<String>,
-        /// Use the Containerfile located at the specified path
-        #[clap(long)]
-        containerfile: Option<PathBuf>,
-    },
+    #[command(name = "run", alias = "")]
+    Run,
+
     /// Login using one of the supported LLM providers
     Login {
-        #[clap(value_enum)]
+        #[arg(value_enum)]
         llm_provider: LLMProvider,
     },
 }
 
 #[derive(Parser)]
-#[clap(version, author, about, long_about = None)]
+#[command(version, author, about, long_about = None)]
 struct Cli {
     /// Enable trace logging
-    #[clap(long)]
+    #[arg(long)]
     trace: bool,
+
     /// Enable debug logging
-    #[clap(long)]
+    #[arg(long)]
     debug: bool,
-    #[clap(subcommand)]
+
+    #[command(flatten)]
+    run: RunArgs,
+
+    #[command(subcommand)]
     command: Option<Command>,
+}
+
+impl Cli {
+    fn invalid_use_of_run_args(&self) -> bool {
+        let is_run_command = matches!(self.command, Some(Command::Run)) || self.command.is_none();
+
+        !is_run_command && (self.run.message.is_some() || self.run.containerfile.is_some())
+    }
 }
 
 pub fn exec() {
@@ -58,14 +76,13 @@ pub fn exec() {
 
     builder.init();
 
-    match cli.command.unwrap_or(Command::Run {
-        message: None,
-        containerfile: None,
-    }) {
-        Command::Run {
-            message,
-            containerfile,
-        } => {
+    if cli.invalid_use_of_run_args() {
+        eprintln!("Run options are only valid with `minion` or `minion run`.");
+        std::process::exit(2);
+    }
+
+    match cli.command.unwrap_or(Command::Run) {
+        Command::Run => {
             let mut config = Config::load_or_create().expect("Failed to load config");
 
             tokio::runtime::Runtime::new()
@@ -91,7 +108,7 @@ pub fn exec() {
                 std::process::exit(1);
             };
 
-            let task_description = if let Some(msg) = message {
+            let task_description = if let Some(msg) = cli.run.message {
                 msg
             } else {
                 read_task_from_editor()
@@ -107,7 +124,7 @@ pub fn exec() {
                 .block_on(async {
                     run::run(
                         llm_router_table,
-                        &containerfile,
+                        &cli.run.containerfile,
                         &std::env::current_dir().expect("Failed to get current dir"),
                         task_description,
                     )

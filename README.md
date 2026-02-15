@@ -30,12 +30,12 @@ For example, [Containerfile.codex](./Containerfile.codex) specifies a working co
   **NOTE**: Codex is currently only supported with `minion login chatgpt` as it relies on [OpenAI's responses API](https://platform.openai.com/docs/api-reference/responses) which is not yet fully supported by other providers.
 - Navigate to any git repository cloned on your local machine and run:
   ```console
-  minion run
+  minion
   ```
   This will start the [default agent](Containerfile.codex) which is based on [codex-acp](https://github.com/zed-industries/codex-acp) and [codex](https://github.com/openai/codex) and provide it access to the git repository in the current directory.
   Note that it will only have access to content checked into git.
   Unstaged or ignored files (which may contain secrets) will deliberately **not** be accessible to the agent.
-  Use `minion --help` and `minion run --help` for more information on CLI usage.
+  Use `minion --help` for more information on CLI usage.
 
 ## License
 
