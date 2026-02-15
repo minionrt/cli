@@ -4,11 +4,11 @@ version = "0.1.0"
 edition = "2024"
 
 [dependencies]
-agent-client-protocol = "0.9"
+agent-client-protocol = "0.9.4"
 agent-api = { path = "../agent-api" }
-anyhow = "1"
-async-trait = "0.1"
-clap = { version = "4", features = ["derive"] }
-tokio = { version = "1", features = ["fs", "macros", "process", "rt"] }
-tokio-util = { version = "0.7", features = ["compat"] }
-url = "2"
+anyhow = "1.0.101"
+async-trait = "0.1.89"
+clap = { version = "4.5.58", features = ["derive"] }
+tokio = { version = "1.49.0", features = ["fs", "macros", "process", "rt"] }
+tokio-util = { version = "0.7.18", features = ["compat"] }
+url = "2.5.8"

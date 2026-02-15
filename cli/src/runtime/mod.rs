@@ -1,10 +1,12 @@
 use std::path::Path;
 
-use bollard::container::{
-    AttachContainerOptions, Config, LogOutput, StartContainerOptions, WaitContainerOptions,
+use bollard::body_full;
+use bollard::container::LogOutput;
+use bollard::models::{ContainerCreateBody, HostConfig};
+use bollard::query_parameters::{
+    AttachContainerOptions, BuildImageOptions, CreateImageOptions, StartContainerOptions,
+    WaitContainerOptions,
 };
-use bollard::image::{BuildImageOptions, CreateImageOptions};
-use bollard::models::HostConfig;
 use bollard::Docker;
 use futures::StreamExt;
 use futures::TryStreamExt;
@@ -37,7 +39,7 @@ impl LocalDockerRuntime {
 
         // On Linux, services bound to "localhost" are not accessible from containers via "host.docker.internal".
         // Instead, we bind to the IP address of the Docker bridge network gateway.
-        let network = self.docker.inspect_network::<&str>("bridge", None).await?;
+        let network = self.docker.inspect_network("bridge", None).await?;
         let ipam = network
             .ipam
             .ok_or_else(|| anyhow::anyhow!("Missing IPAM information in network inspection"))?;
@@ -109,7 +111,7 @@ impl LocalDockerRuntime {
                 .unwrap()
                 .to_string_lossy()
                 .into(),
-            t: image_name.clone(),
+            t: Some(image_name.clone()),
             rm: true,
             ..Default::default()
         };
@@ -117,7 +119,7 @@ impl LocalDockerRuntime {
         // Build the image using the tar archive as the build context.
         let mut build_stream =
             self.docker
-                .build_image(build_options, None, Some(archive_buffer.into()));
+                .build_image(build_options, None, Some(body_full(archive_buffer.into())));
 
         while let Some(build_result) = build_stream.try_next().await? {
             if let Some(output) = build_result.stream {
@@ -131,7 +133,7 @@ impl LocalDockerRuntime {
     /// Pull a container image from a registry.
     pub async fn pull_container_image(&self, image: &str) -> anyhow::Result<()> {
         let options = Some(CreateImageOptions {
-            from_image: image,
+            from_image: Some(image.to_string()),
             ..Default::default()
         });
 
@@ -157,7 +159,7 @@ impl LocalDockerRuntime {
             ..Default::default()
         };
 
-        let container_config = Config {
+        let container_config = ContainerCreateBody {
             image: Some(config.image),
             env: Some(env),
             host_config: Some(host_config),
@@ -166,20 +168,17 @@ impl LocalDockerRuntime {
             ..Default::default()
         };
 
-        let container = self
-            .docker
-            .create_container::<&str, _>(None, container_config)
-            .await?;
+        let container = self.docker.create_container(None, container_config).await?;
         self.docker
-            .start_container(&container.id, None::<StartContainerOptions<String>>)
+            .start_container(&container.id, None::<StartContainerOptions>)
             .await?;
 
-        let attach_options = Some(AttachContainerOptions::<&str> {
-            stdout: Some(true),
-            stderr: Some(true),
-            stdin: None,
-            stream: Some(true),
-            logs: Some(true),
+        let attach_options = Some(AttachContainerOptions {
+            stdout: true,
+            stderr: true,
+            stdin: false,
+            stream: true,
+            logs: true,
             ..Default::default()
         });
 
@@ -212,7 +211,7 @@ impl LocalDockerRuntime {
         // Wait for the container to finish running.
         let mut wait_stream = self
             .docker
-            .wait_container(&container.id, None::<WaitContainerOptions<String>>);
+            .wait_container(&container.id, None::<WaitContainerOptions>);
 
         if let Some(result) = wait_stream.next().await {
             let wait_msg = result?;

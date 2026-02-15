@@ -1,4 +1,4 @@
-use rand::{distr::Alphanumeric, Rng};
+use rand::{distr::Alphanumeric, RngExt as _};
 use url::Url;
 
 use crate::config::LLMRouterTable;

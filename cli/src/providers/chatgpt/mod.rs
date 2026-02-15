@@ -9,7 +9,7 @@ use axum::Extension;
 use axum::Router;
 use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
 use once_cell::sync::Lazy;
-use rand::RngCore as _;
+use rand::Rng as _;
 use serde::Deserialize;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
